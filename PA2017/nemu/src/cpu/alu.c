@@ -1,0 +1,249 @@
+#include "cpu/cpu.h"
+
+void set_CF_add(uint32_t result, uint32_t src) {
+	cpu.eflags.CF = result < src;
+}
+
+void set_PF(uint32_t result) {
+	// set according to the low-order 8-bits of the result
+	int count = 0;	//number of 1 in the low-order 8-bits of the result
+	uint32_t temp = result;
+	for(int i = 0;i < 8;i++){
+		temp >>= 1;
+		temp <<= 1;
+		if(temp != result)
+			count++;
+		temp >>= 1;
+		result >>= 1;
+	}
+	if((count % 2) == 0)
+		cpu.eflags.PF = 1;
+	else cpu.eflags.PF = 0;
+}
+
+void set_ZF(uint32_t result) {
+	cpu.eflags.ZF = (result == 0);
+}
+
+void set_SF(uint32_t result) {
+	cpu.eflags.SF = sign(result);
+}
+
+void set_OF_add(uint32_t result, uint32_t src, uint32_t dest) {
+	if(sign(src) == sign(dest)) {
+		if(sign(src) != sign(result))
+			cpu.eflags.OF = 1;
+		else
+			cpu.eflags.OF = 0;
+	} else {
+		cpu.eflags.OF = 0;
+	}
+}
+
+uint32_t alu_add(uint32_t src, uint32_t dest) {
+	uint32_t res = 0;
+	res = dest + src;
+	set_CF_add(res, src);
+	set_PF(res);
+	// set_AF();
+	set_ZF(res);
+	set_SF(res);
+	set_OF_add(res, src, dest);
+	return res;
+}
+
+
+uint32_t alu_adc(uint32_t src, uint32_t dest) {
+	uint32_t temp = cpu.eflags.CF, tempCF = 0;
+       	uint32_t res = alu_add(src,dest),tempOF = cpu.eflags.OF;
+	tempCF = cpu.eflags.CF;
+	res = alu_add(temp,res);
+	if(tempCF == 1)		cpu.eflags.CF = 1;
+	cpu.eflags.OF = tempOF;
+	return res;
+}
+
+void set_CF_sub(uint32_t src,uint32_t dest) {
+	if(dest < src)
+		cpu.eflags.CF = 1;
+	else 
+		cpu.eflags.CF = 0;
+}
+
+void set_OF_sub(uint32_t res,uint32_t src,uint32_t dest) {
+	if(((src >> 31)^(dest >> 31)) != 0) {
+		if(((src >> 31)^(res >> 31)) == 0)
+			cpu.eflags.OF = 1;
+		else cpu.eflags.OF = 0;
+	}
+	else cpu.eflags.OF = 0;
+}
+
+uint32_t alu_sub(uint32_t src, uint32_t dest) {
+	uint32_t res = alu_add((~src+1),dest);
+	set_CF_sub(src, dest);
+	set_PF(res);
+	// set_AF();
+	set_ZF(res);
+	set_SF(res);
+	set_OF_sub(res, src, dest);
+	return res;
+}
+
+uint32_t alu_sbb(uint32_t src, uint32_t dest) {
+	uint32_t temp = cpu.eflags.CF;
+	uint32_t res = alu_add(temp,src),tempCF = cpu.eflags.CF;
+	res = alu_sub(res,dest);
+	if(tempCF == 1)
+		cpu.eflags.CF = 1;
+	set_OF_sub(res,src,dest);
+
+	return res;
+}
+
+
+uint64_t alu_mul(uint32_t src, uint32_t dest, size_t data_size) {
+	uint64_t res = (uint64_t)dest*(uint64_t)src;
+	if(res>>data_size == 0) {
+		cpu.eflags.CF = 0;
+		cpu.eflags.OF = 0;
+	}
+	else {
+		cpu.eflags.CF = 1;
+		cpu.eflags.OF = 1;
+	}
+	set_SF(res);
+	set_ZF(res);
+	set_PF(res);
+	return res;
+}
+
+int64_t alu_imul(int32_t src, int32_t dest, size_t data_size) {
+	uint64_t res = (uint64_t)dest*(uint64_t)src;
+	return res;
+}
+
+uint32_t alu_div(uint64_t src, uint64_t dest, size_t data_size) {
+	uint32_t res = dest/src;
+	set_SF(res);
+	set_ZF(res);
+	set_PF(res);
+	return res;
+}
+
+int32_t alu_idiv(int64_t src, int64_t dest, size_t data_size) {
+	uint32_t res = dest/src;
+	set_SF(res);
+	set_ZF(res);
+	set_PF(res);
+	return res;
+}
+
+uint32_t alu_mod(uint64_t src, uint64_t dest) {
+	return dest%src;
+}
+
+int32_t alu_imod(int64_t src, int64_t dest) {
+	return dest%src;
+}
+
+uint32_t alu_and(uint32_t src, uint32_t dest) {
+	uint32_t res = src & dest;
+	cpu.eflags.CF = cpu.eflags.OF = 0;
+	set_PF(res);
+	set_ZF(res);
+	set_SF(res);
+	return res;
+
+}
+
+uint32_t alu_xor(uint32_t src, uint32_t dest) {
+	uint32_t res = src^dest;
+	cpu.eflags.OF = cpu.eflags.CF = 0;
+	set_ZF(res);
+	set_SF(res);
+	set_PF(res);
+	return res;
+}
+
+uint32_t alu_or(uint32_t src, uint32_t dest) {
+	uint32_t res = src|dest;
+	cpu.eflags.OF = cpu.eflags.CF = 0;
+	set_ZF(res);
+	set_SF(res);
+	set_PF(res);
+	return res;
+}
+
+uint32_t alu_shl(uint32_t src, uint32_t dest, size_t data_size) {
+	uint32_t res = dest, temp = ~0;
+	temp <<= (data_size-1);	//1111..00
+	temp <<= 1;
+	dest &= temp;  	//make the low-data_size bits zero
+	temp = ~temp;	//0000...11
+	for(uint32_t i = src;i != 0;i--) {
+		cpu.eflags.CF = (res>>(data_size-1))%2;
+		res <<= 1;
+	}
+	res &= temp;	//make the high-data_size bits zero
+	if(res == 0)
+		cpu.eflags.ZF = 1;
+	else	cpu.eflags.ZF = 0;
+	cpu.eflags.SF = (res>>(data_size-1))%2;
+	set_PF(res);
+	res = res | dest;
+	return res;
+}
+
+uint32_t alu_shr(uint32_t src, uint32_t dest, size_t data_size) {
+	uint32_t res = dest, temp = ~0;
+	temp <<= (data_size-1);	//1111..00
+	temp <<= 1;
+	dest &= temp;  	//make the low-data_size bits zero
+	temp = ~temp;	//0000...11
+	res &= temp;
+	for(uint32_t i = src;i != 0;i--) {
+		cpu.eflags.CF = res%2;
+		res >>= 1;
+	}
+	res &= temp;	//make the high-data_size bits zero
+	if(res == 0)
+		cpu.eflags.ZF = 1;
+	else	cpu.eflags.ZF = 0;
+	cpu.eflags.SF = (res>>(data_size-1))%2;
+	set_PF(res);
+	res = res | dest;
+	return res;
+}
+
+uint32_t alu_sar(uint32_t src, uint32_t dest, size_t data_size) {
+	uint32_t res = dest, temp = ~0,sign = 0;
+	temp <<= (data_size-1);	//1111..00
+	temp <<= 1;
+	dest &= temp;  	//make the low-data_size bits zero
+	temp = ~temp;	//0000...11
+	res &= temp;
+	sign = (res>>(data_size-1))%2;	//get the sign of res
+	for(uint32_t i = src;i != 0;i--) {
+		cpu.eflags.CF = res%2;
+		res >>= 1;
+	}
+	if(sign == 1) {
+		sign = ~0 & temp;
+		sign >>= (data_size-src);
+		sign <<= (data_size-src);
+		res |= sign;
+	}
+	res &= temp;	//make the high-data_size bits zero
+	if(res == 0)
+		cpu.eflags.ZF = 1;
+	else	cpu.eflags.ZF = 0;
+	cpu.eflags.SF = (res>>(data_size-1))%2;
+	set_PF(res);
+	res = res | dest;
+	return res;
+}
+
+uint32_t alu_sal(uint32_t src, uint32_t dest, size_t data_size) {
+	return alu_shl(src,dest,data_size);
+}
